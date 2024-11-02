@@ -4,4 +4,4 @@ A Docker container running Kali Linux with XFCE desktop environment, accessible 
 
 ## Quick Start
 ```bash
-</rewritten_file>
+</rewritten_file># Updated
