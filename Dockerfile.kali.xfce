@@ -1,0 +1,76 @@
+FROM kalilinux/kali-rolling
+
+# Install minimal packages
+RUN apt update && \
+    DEBIAN_FRONTEND=noninteractive apt install -y \
+    xfce4 \
+    xfce4-terminal \
+    xrdp \
+    tigervnc-standalone-server \
+    dbus-x11 \
+    sudo \
+    net-tools \
+    psmisc \
+    locales
+
+# Configure locale
+RUN echo "en_US.UTF-8 UTF-8" > /etc/locale.gen && \
+    dpkg-reconfigure --frontend=noninteractive locales
+
+# Create user
+ARG USER=dmas
+ARG PASS=1234
+RUN useradd -m $USER -p $(openssl passwd $PASS) && \
+    usermod -aG sudo $USER
+
+# Configure VNC
+RUN mkdir -p /home/$USER/.vnc && \
+    echo $PASS | vncpasswd -f > /home/$USER/.vnc/passwd && \
+    chmod 0600 /home/$USER/.vnc/passwd && \
+    chown -R $USER:$USER /home/$USER/.vnc
+
+# Configure XFCE startup
+RUN echo "#!/bin/bash\n\
+unset SESSION_MANAGER\n\
+unset DBUS_SESSION_BUS_ADDRESS\n\
+exec startxfce4" > /home/$USER/.vnc/xstartup && \
+    chmod +x /home/$USER/.vnc/xstartup
+
+# Configure XRDP
+RUN echo "#!/bin/bash\n\
+exec startxfce4" > /etc/xrdp/startwm.sh && \
+    chmod +x /etc/xrdp/startwm.sh
+
+# Create startup script
+RUN echo "#!/bin/bash\n\
+# Cleanup\n\
+killall -9 xrdp xrdp-sesman Xtigervnc 2>/dev/null || true\n\
+rm -rf /tmp/.X* /tmp/.x*\n\
+rm -f /var/run/xrdp/xrdp*.pid\n\
+\n\
+# Setup\n\
+mkdir -p /var/run/dbus /var/run/xrdp /tmp/.X11-unix\n\
+chmod 1777 /tmp/.X11-unix\n\
+\n\
+# Start services\n\
+dbus-daemon --system --fork\n\
+/usr/sbin/xrdp-sesman\n\
+/usr/sbin/xrdp -nodaemon &\n\
+\n\
+# Start VNC\n\
+su - $USER -c 'vncserver :2 -geometry 1920x1080 -depth 24 -localhost no -rfbport 5902'\n\
+\n\
+# Monitor\n\
+while true; do\n\
+    sleep 5\n\
+    pgrep -f Xtigervnc >/dev/null || su - $USER -c 'vncserver :2 -geometry 1920x1080 -depth 24 -localhost no -rfbport 5902'\n\
+    pgrep -f xrdp >/dev/null || { /usr/sbin/xrdp-sesman && /usr/sbin/xrdp -nodaemon & }\n\
+done" > /startup.sh && chmod +x /startup.sh
+
+ENV DISPLAY=:2
+ENV USER=$USER
+ENV HOME=/home/$USER
+
+EXPOSE 3389 5902
+
+CMD ["/startup.sh"]
