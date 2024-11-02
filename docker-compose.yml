@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  kali-xfce:
+    image: ghcr.io/dannymas-git/kali-docker:latest
+    container_name: kali-xfce
+    ports:
+      - "3389:3389"
+      - "5902:5902"
+    volumes:
+      - kali-home:/home/dmas
+    tmpfs:
+      - /tmp
+      - /run
+    restart: unless-stopped
+    privileged: true
+    healthcheck:
+      test: ["CMD", "netstat", "-tuln", "|", "grep", "-E", '":5902|:3389"']
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  kali-home:
+    driver: local
+
+networks:
+  kali_net:
+    driver: bridge
