@@ -6,12 +6,18 @@ RUN apt update && \
     xfce4 \
     xfce4-terminal \
     xrdp \
-    tigervnc-standalone-server \
     dbus-x11 \
     sudo \
     net-tools \
     psmisc \
-    locales
+    locales \
+    supervisor \
+    xorgxrdp \
+    xauth \
+    x11-xserver-utils \
+    xfce4-goodies \
+    firefox-esr \
+    nano
 
 # Configure locale
 RUN echo "en_US.UTF-8 UTF-8" > /etc/locale.gen && \
@@ -23,54 +29,79 @@ ARG PASS=1234
 RUN useradd -m $USER -p $(openssl passwd $PASS) && \
     usermod -aG sudo $USER
 
-# Configure VNC
-RUN mkdir -p /home/$USER/.vnc && \
-    echo $PASS | vncpasswd -f > /home/$USER/.vnc/passwd && \
-    chmod 0600 /home/$USER/.vnc/passwd && \
-    chown -R $USER:$USER /home/$USER/.vnc
-
-# Configure XFCE startup
-RUN echo "#!/bin/bash\n\
-unset SESSION_MANAGER\n\
-unset DBUS_SESSION_BUS_ADDRESS\n\
-exec startxfce4" > /home/$USER/.vnc/xstartup && \
-    chmod +x /home/$USER/.vnc/xstartup
-
 # Configure XRDP
+RUN mkdir -p /etc/xrdp/ssl && \
+    openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/xrdp/ssl/key.pem \
+    -out /etc/xrdp/ssl/cert.pem -days 365 \
+    -subj "/C=US/ST=State/L=City/O=Organization/CN=localhost" && \
+    chmod 644 /etc/xrdp/ssl/cert.pem && \
+    chmod 644 /etc/xrdp/ssl/key.pem
+
+COPY xrdp.ini /etc/xrdp/xrdp.ini
+
+# Configure XRDP startup
 RUN echo "#!/bin/bash\n\
+unset DBUS_SESSION_BUS_ADDRESS\n\
+unset XDG_RUNTIME_DIR\n\
+export DISPLAY=:10\n\
+export XDG_SESSION_TYPE=x11\n\
+export XDG_RUNTIME_DIR=/tmp/runtime-\$USER\n\
+export LANG=en_US.UTF-8\n\
+cd \$HOME\n\
 exec startxfce4" > /etc/xrdp/startwm.sh && \
     chmod +x /etc/xrdp/startwm.sh
 
-# Create startup script
-RUN echo "#!/bin/bash\n\
-# Cleanup\n\
-killall -9 xrdp xrdp-sesman Xtigervnc 2>/dev/null || true\n\
-rm -rf /tmp/.X* /tmp/.x*\n\
-rm -f /var/run/xrdp/xrdp*.pid\n\
+# Create supervisor configuration
+RUN echo '[supervisord]\n\
+nodaemon=true\n\
+logfile=/var/log/supervisor/supervisord.log\n\
+pidfile=/var/run/supervisord.pid\n\
+childlogdir=/var/log/supervisor\n\
+user=root\n\
 \n\
-# Setup\n\
-mkdir -p /var/run/dbus /var/run/xrdp /tmp/.X11-unix\n\
-chmod 1777 /tmp/.X11-unix\n\
+[program:dbus]\n\
+command=/usr/bin/dbus-daemon --system --nofork\n\
+priority=1\n\
+autorestart=true\n\
+startsecs=5\n\
+stdout_logfile=/var/log/supervisor/dbus.log\n\
+stderr_logfile=/var/log/supervisor/dbus.err\n\
 \n\
-# Start services\n\
-dbus-daemon --system --fork\n\
-/usr/sbin/xrdp-sesman\n\
-/usr/sbin/xrdp -nodaemon &\n\
+[program:xrdp-sesman]\n\
+command=/usr/sbin/xrdp-sesman --nodaemon\n\
+priority=2\n\
+autorestart=true\n\
+startsecs=5\n\
+stdout_logfile=/var/log/supervisor/xrdp-sesman.log\n\
+stderr_logfile=/var/log/supervisor/xrdp-sesman.err\n\
 \n\
-# Start VNC\n\
-su - $USER -c 'vncserver :2 -geometry 1920x1080 -depth 24 -localhost no -rfbport 5902'\n\
-\n\
-# Monitor\n\
-while true; do\n\
-    sleep 5\n\
-    pgrep -f Xtigervnc >/dev/null || su - $USER -c 'vncserver :2 -geometry 1920x1080 -depth 24 -localhost no -rfbport 5902'\n\
-    pgrep -f xrdp >/dev/null || { /usr/sbin/xrdp-sesman && /usr/sbin/xrdp -nodaemon & }\n\
-done" > /startup.sh && chmod +x /startup.sh
+[program:xrdp]\n\
+command=/usr/sbin/xrdp -nodaemon\n\
+priority=3\n\
+autorestart=true\n\
+startsecs=5\n\
+stdout_logfile=/var/log/supervisor/xrdp.log\n\
+stderr_logfile=/var/log/supervisor/xrdp.err' > /etc/supervisor/conf.d/supervisord.conf
 
-ENV DISPLAY=:2
+# Create necessary directories and set permissions
+RUN mkdir -p /var/run/dbus && \
+    chown messagebus:messagebus /var/run/dbus && \
+    mkdir -p /tmp/.X11-unix && \
+    chmod 1777 /tmp/.X11-unix && \
+    mkdir -p /tmp/runtime-$USER && \
+    chown $USER:$USER /tmp/runtime-$USER && \
+    mkdir -p /var/run/xrdp && \
+    chmod 2775 /var/run/xrdp && \
+    mkdir -p /var/log/supervisor
+
+# Set proper permissions
+RUN chown -R $USER:$USER /home/$USER && \
+    echo "$USER ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+
+ENV DISPLAY=:10
 ENV USER=$USER
 ENV HOME=/home/$USER
 
-EXPOSE 3389 5902
+EXPOSE 3389
 
-CMD ["/startup.sh"]
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]

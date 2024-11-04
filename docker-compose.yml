@@ -1,29 +1,32 @@
-version: '3.8'
-
+version: '3'
 services:
-  kali-xfce:
-    image: ghcr.io/dannymas-git/kali-docker:latest
-    container_name: kali-xfce
+  kali-desktop:
+    build:
+      context: .
+      dockerfile: Dockerfile.kali.xfce
+      args:
+        USER: dmas
+        PASS: 1234
     ports:
       - "3389:3389"
-      - "5902:5902"
-    volumes:
-      - kali-home:/home/dmas
+    environment:
+      - USER=dmas
+      - DISPLAY=:10
+      - XAUTHORITY=/home/dmas/.Xauthority
+      - DEBIAN_FRONTEND=noninteractive
+      - XDG_RUNTIME_DIR=/tmp/runtime-dmas
+      - LANG=en_US.UTF-8
     tmpfs:
       - /tmp
       - /run
+      - /run/lock
     restart: unless-stopped
+    networks:
+      - kali-net
     privileged: true
-    healthcheck:
-      test: ["CMD", "netstat", "-tuln", "|", "grep", "-E", '":5902|:3389"']
-      interval: 10s
-      timeout: 5s
-      retries: 3
-
-volumes:
-  kali-home:
-    driver: local
+    shm_size: '2gb'
+    hostname: kali-desktop
 
 networks:
-  kali_net:
+  kali-net:
     driver: bridge
